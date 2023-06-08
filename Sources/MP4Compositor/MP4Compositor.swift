@@ -26,7 +26,7 @@ public final class MP4Compositor {
     /// 视频的总时长，以纳秒为单位。
     private var videoDuration: Int64 = 0
     
-    private(set) var thumbnails: CIImage?
+    private(set) var thumbnail: CIImage?
     
     private var backgroundTask: UIBackgroundTaskIdentifier?
     
@@ -94,6 +94,14 @@ extension MP4Compositor {
         let fileName = "\(UUID().uuidString).mp4"
         let path = (tmp as NSString).appendingPathComponent(fileName)
         return URL(fileURLWithPath: path)
+    }
+}
+
+extension MP4Compositor {
+    
+    public func requestThumbnail() -> UIImage? {
+        guard let thumbnail = thumbnail else { return nil }
+        return UIImage(ciImage: thumbnail)
     }
 }
 
@@ -250,15 +258,15 @@ extension MP4Compositor: VideoRecordable {
                    videoAssetWriterInput.isReadyForMoreMediaData {
                     videoAssetWriterInput.append(buffer)
                 }
-                if thumbnails == nil, let imageBuffer = buffer.imageBuffer {
-                    thumbnails = CIImage(cvImageBuffer: imageBuffer)
+                if thumbnail == nil, let imageBuffer = buffer.imageBuffer {
+                    thumbnail = CIImage(cvImageBuffer: imageBuffer)
                 }
             case .pixel(let buffer):
                 if videoAssetWriterInput.isReadyForMoreMediaData {
                     pixelBufferAdaptor.append(buffer, withPresentationTime: sourceTime)
                 }
-                if thumbnails == nil {
-                    thumbnails = CIImage(cvImageBuffer: buffer)
+                if thumbnail == nil {
+                    thumbnail = CIImage(cvImageBuffer: buffer)
                 }
             }
         }

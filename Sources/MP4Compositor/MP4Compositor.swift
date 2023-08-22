@@ -279,7 +279,11 @@ extension MP4Compositor: VideoRecordable {
     
     @discardableResult
     public func finishWriting() async throws -> URL? {
-        defer { self.endBackgroundTask() }
+        objc_sync_enter(self)
+        defer {
+            self.endBackgroundTask()
+            objc_sync_exit(self)
+        }
         // 如果有错误则直接抛出
         if let error = self.error {
             throw error

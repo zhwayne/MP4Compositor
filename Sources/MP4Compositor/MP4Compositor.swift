@@ -10,7 +10,7 @@ import CoreImage
 
 public final class MP4Compositor {
     
-    private var assetWriter: AVAssetWriter?
+    private let assetWriter: AVAssetWriter
     
     private let videoAssetWriterInput: AVAssetWriterInput
     
@@ -31,33 +31,33 @@ public final class MP4Compositor {
     private var backgroundTask: UIBackgroundTaskIdentifier?
     
     private var backgroundTaskCancellable: AnyCancellable?
-        
-    private var error: Error?
     
     private var url: URL?
-        
+    
     private var sourceTime: CMTime = .zero
     
     private var lastTimeIntervalBetweenTowFrams: TimeInterval = 0
+    
+    private var queue = DispatchQueue(label: "com.zhwayne.MP4Compositor", qos: .default)
     
     deinit {
         print("\(#function)[\(#line)] \(#fileID)")
     }
     
     public init(videoConfiguration: VideoConfiguration = .default,
-         audioConfiguration: AudioConfiguration = .default,
-         url: URL? = nil) throws {
-
+                audioConfiguration: AudioConfiguration = .default,
+                url: URL? = nil) throws {
+        
         // 初始化 assetWriter。
         self.url = url ?? Self.getDefaultVideoURL()
         assetWriter = try AVAssetWriter(url: self.url!, fileType: .mp4)
-        assetWriter!.shouldOptimizeForNetworkUse = true
+        assetWriter.shouldOptimizeForNetworkUse = true
         
         // 初始化 videoAssetWriterInput。
         let videoOutputSettings = videoConfiguration.outputSettings
         videoAssetWriterInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoOutputSettings)
         videoAssetWriterInput.expectsMediaDataInRealTime = true
-
+        
         pixelBufferAdaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: videoAssetWriterInput)
         
         // 初始化 audioAssetWriterInput。
@@ -68,14 +68,14 @@ public final class MP4Compositor {
         audioMicAssetWriterInput.expectsMediaDataInRealTime = true
         
         // 添加 Inputs
-        if assetWriter!.canAdd(videoAssetWriterInput) {
-            assetWriter!.add(videoAssetWriterInput)
+        if assetWriter.canAdd(videoAssetWriterInput) {
+            assetWriter.add(videoAssetWriterInput)
         }
-        if assetWriter!.canAdd(audioAppAssetWriterInput) {
-            assetWriter!.add(audioAppAssetWriterInput)
+        if assetWriter.canAdd(audioAppAssetWriterInput) {
+            assetWriter.add(audioAppAssetWriterInput)
         }
-        if assetWriter!.canAdd(audioMicAssetWriterInput) {
-            assetWriter!.add(audioMicAssetWriterInput)
+        if assetWriter.canAdd(audioMicAssetWriterInput) {
+            assetWriter.add(audioMicAssetWriterInput)
         }
         
         // 后台任务处理
@@ -205,9 +205,11 @@ extension MP4Compositor: VideoRecordable {
     }
     
     private func endBackgroundTask() {
-        if let backgroundTask, backgroundTask != .invalid {
-            UIApplication.shared.endBackgroundTask(backgroundTask)
-            self.backgroundTask = .invalid
+        DispatchQueue.main.async {
+            if let backgroundTask = self.backgroundTask, backgroundTask != .invalid {
+                UIApplication.shared.endBackgroundTask(backgroundTask)
+                self.backgroundTask = .invalid
+            }
         }
     }
     
@@ -226,95 +228,100 @@ extension MP4Compositor: VideoRecordable {
     }
     
     public func write(buffer: VideoBuffer) {
-        guard let assetWriter else {
-            return
-        }
-        // 处理错误
-        if assetWriter.status == .failed, let error = assetWriter.error {
-            self.error = error
-            self.url = nil
-            print("write buffer error: \(error)")
-            endBackgroundTask()
-        }
-        guard self.url != nil else {
-            return
-        }
-        sourceTime = makeSourceTime()
-        
-        if assetWriter.status == .unknown {
-            guard assetWriter.startWriting() else { return }
-            assetWriter.startSession(atSourceTime: sourceTime)
-        }
-        
-        if assetWriter.status == .writing || assetWriter.status == .unknown {
-            switch buffer {
-            case .audioApp(let buffer):
-                if let buffer = try? buffer.adjustTime(sourceTime),
-                   audioAppAssetWriterInput.isReadyForMoreMediaData {
-                    audioAppAssetWriterInput.append(buffer)
-                }
-            case .audioMic(let buffer):
-                if let buffer = try? buffer.adjustTime(sourceTime),
-                   audioMicAssetWriterInput.isReadyForMoreMediaData {
-                    audioMicAssetWriterInput.append(buffer)
-                }
-            case .video(let buffer):
-                if let buffer = try? buffer.adjustTime(sourceTime),
-                   videoAssetWriterInput.isReadyForMoreMediaData {
-                    videoAssetWriterInput.append(buffer)
-                }
-                if thumbnail == nil, let imageBuffer = buffer.imageBuffer {
-                    thumbnail = CIImage(cvImageBuffer: imageBuffer)
-                }
-            case .pixel(let buffer):
-                if videoAssetWriterInput.isReadyForMoreMediaData {
-                    pixelBufferAdaptor.append(buffer, withPresentationTime: sourceTime)
-                }
-                if thumbnail == nil {
-                    thumbnail = CIImage(cvImageBuffer: buffer)
+        queue.sync {
+            // 处理错误
+            if assetWriter.status == .failed, let error = assetWriter.error {
+                self.url = nil
+                print("write buffer error: \(error)")
+                endBackgroundTask()
+            }
+            guard self.url != nil else {
+                return
+            }
+            sourceTime = makeSourceTime()
+            
+            if assetWriter.status == .unknown {
+                guard assetWriter.startWriting() else { return }
+                assetWriter.startSession(atSourceTime: sourceTime)
+            }
+            
+            if assetWriter.status == .writing || assetWriter.status == .unknown {
+                switch buffer {
+                case .audioApp(let buffer):
+                    if let buffer = try? buffer.adjustTime(sourceTime),
+                       audioAppAssetWriterInput.isReadyForMoreMediaData {
+                        audioAppAssetWriterInput.append(buffer)
+                    }
+                case .audioMic(let buffer):
+                    if let buffer = try? buffer.adjustTime(sourceTime),
+                       audioMicAssetWriterInput.isReadyForMoreMediaData {
+                        audioMicAssetWriterInput.append(buffer)
+                    }
+                case .video(let buffer):
+                    if let buffer = try? buffer.adjustTime(sourceTime),
+                       videoAssetWriterInput.isReadyForMoreMediaData {
+                        videoAssetWriterInput.append(buffer)
+                    }
+                    if thumbnail == nil, let imageBuffer = buffer.imageBuffer {
+                        thumbnail = CIImage(cvImageBuffer: imageBuffer)
+                    }
+                case .pixel(let buffer):
+                    if videoAssetWriterInput.isReadyForMoreMediaData {
+                        pixelBufferAdaptor.append(buffer, withPresentationTime: sourceTime)
+                    }
+                    if thumbnail == nil {
+                        thumbnail = CIImage(cvImageBuffer: buffer)
+                    }
                 }
             }
         }
     }
     
     @discardableResult
+    public func finishWriting(completionHandler: ((Result<URL?, Error>) -> Void)?) {
+        queue.sync {
+            // 如果有错误则直接抛出
+            if let error = assetWriter.error {
+                completionHandler?(.failure(error))
+                endBackgroundTask()
+                return
+            }
+            
+            let status = assetWriter.status
+            if status == .unknown || status == .cancelled || status == .completed {
+                completionHandler?(.success(url))
+                endBackgroundTask()
+                return
+            }
+            
+            // writing
+            
+            videoAssetWriterInput.markAsFinished()
+            audioMicAssetWriterInput.markAsFinished()
+            audioAppAssetWriterInput.markAsFinished()
+            
+            var holder: MP4Compositor? = self
+            assetWriter.finishWriting {
+                if let error = holder?.assetWriter.error {
+                    completionHandler?(.failure(error))
+                } else {
+                    completionHandler?(.success(holder?.url))
+                }
+                holder?.endBackgroundTask()
+                holder = nil
+            }
+        }
+    }
+    
+    @discardableResult
     public func finishWriting() async throws -> URL? {
-        objc_sync_enter(self)
-        defer {
-            self.endBackgroundTask()
-            objc_sync_exit(self)
-        }
-        // 如果有错误则直接抛出
-        if let error = self.error {
-            throw error
-        }
-        // 如果不存在 assetWriter 则直接返回 url，因为 assetWriter 在结束录制完成后会被置空。
-        guard let assetWriter = self.assetWriter else {
-            return url
-        }
-        
-        switch assetWriter.status {
-        case .unknown, .cancelled:
-            return nil
-        case .completed:
-            if let error = self.error { throw error } else { return url }
-        case .failed:
-            if let error = self.error { throw error } else { return nil }
-        case .writing: break;
-        @unknown default:
-            fatalError()
-        }
-        
-        videoAssetWriterInput.markAsFinished()
-        audioMicAssetWriterInput.markAsFinished()
-        audioAppAssetWriterInput.markAsFinished()
-        
-        await assetWriter.finishWriting()
-        self.assetWriter = nil
-        if let error = assetWriter.error {
-            throw error
-        } else {
-            return url
+        try await withCheckedThrowingContinuation { continuation in
+            self.finishWriting { result in
+                switch result {
+                case let .success(url): continuation.resume(returning: url)
+                case let .failure(err): continuation.resume(throwing: err)
+                }
+            }
         }
     }
 }
